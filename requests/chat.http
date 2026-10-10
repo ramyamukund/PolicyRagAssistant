@@ -1,0 +1,40 @@
+@api = http://localhost:5271
+
+### Health
+GET {{api}}/health
+
+### Leave
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "How many days of annual leave do employees get?" }
+
+### Remote work
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "Can I work from home, and how many days a week?" }
+
+### Expenses
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "What is the process for claiming travel expenses?" }
+
+### Code of conduct
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "What should I do if I witness harassment at work?" }
+
+### Out of scope — should return the "not found" answer
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "What is the capital of France?" }
+
+### Invalid — should return 400
+POST {{api}}/chat
+Content-Type: application/json
+
+{ "question": "" }
