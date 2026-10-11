@@ -21,7 +21,13 @@ requests/
 ## Requirements
 
 - .NET 10 SDK. The original plan targeted .NET 9; .NET 10 is used because it is the current LTS release.
-- Azure CLI, signed in with `az login`
+- Azure CLI (`winget install -e --id Microsoft.AzureCLI`), signed in to the tenant that holds the resources:
+
+  ```powershell
+  az login --tenant <tenant-id>
+  ```
+
+  The tenant ID is on the **Microsoft Entra ID** overview page in the portal. Plain `az login` can pick a different tenant and then find no subscriptions.
 
 ## Azure prerequisites
 
@@ -30,9 +36,9 @@ Create these resources manually in the Azure portal. This repo does not provisio
 | Resource | Details |
 |---|---|
 | Foundry project | Chat deployment (e.g. `gpt-4.1-mini`) and embedding deployment (`text-embedding-3-small`) |
-| Azure AI Search | Basic tier or higher, semantic ranker enabled |
+| Azure AI Search | Free tier is enough; the semantic ranker works on it within the free monthly quota |
 | Storage account | Blob container named `policies` containing the policy PDFs |
-| Search index | Created with the portal's **Import and vectorize data** wizard over the `policies` container, using the embedding deployment. Add a semantic configuration named `default`. |
+| Search index | Created with the portal's **Import data (new)** / **Import and vectorize data** wizard over the `policies` container, using the embedding deployment. Tick **Enable semantic ranker** so the wizard creates a semantic configuration. |
 
 The wizard's default index field names are `chunk_id` (key), `parent_id`, `chunk` (text), `title` and `text_vector` (vector). All of them can be changed in configuration.
 
@@ -43,23 +49,26 @@ Grant the signed-in developer account:
 - **Search Index Data Reader** on the Search service
 - **Cognitive Services OpenAI User** on the Foundry resource
 
-No API keys are used anywhere. All authentication goes through `DefaultAzureCredential`.
+New role assignments can take a few minutes to take effect.
+
+No API keys are used anywhere. All authentication goes through `DefaultAzureCredential`, which picks up the `az login` session.
 
 ## Configuration
 
-Set endpoints in `src/PolicyAssistant.Api/appsettings.Development.json` or user secrets (endpoints only, never keys):
+Defaults (field names, `Top`, the reranker threshold, CORS origins) are in `src/PolicyAssistant.Api/appsettings.json`. Set the environment-specific values with user secrets so they stay out of the repo (endpoints and names only, never keys):
 
-```json
-{
-  "AzureSearch": {
-    "Endpoint": "https://<search-service>.search.windows.net",
-    "IndexName": "<index-name>"
-  },
-  "AzureOpenAI": {
-    "Endpoint": "https://<foundry-resource>.openai.azure.com/"
-  }
-}
+```powershell
+$api = "src/PolicyAssistant.Api"
+dotnet user-secrets set "AzureSearch:Endpoint" "https://<search-service>.search.windows.net" --project $api
+dotnet user-secrets set "AzureSearch:IndexName" "<index-name>" --project $api
+dotnet user-secrets set "AzureSearch:SemanticConfigurationName" "<semantic-config-name>" --project $api
+dotnet user-secrets set "AzureOpenAI:Endpoint" "https://<foundry-resource>.openai.azure.com/openai/v1" --project $api
+dotnet user-secrets set "AzureOpenAI:ChatDeployment" "gpt-4.1-mini" --project $api
 ```
+
+- The index and semantic configuration names are on the Search service's **Indexes** page and the index's **Semantic configurations** tab.
+- `AzureOpenAI:Endpoint` is the OpenAI-compatible **v1** endpoint (ending in `/openai/v1`), so any Foundry chat deployment works by changing `ChatDeployment`.
+- The API fails at startup with a validation error if any required value is missing.
 
 ## Running
 
@@ -70,6 +79,15 @@ dotnet run --project src/PolicyAssistant.Web   # http://localhost:5248
 ```
 
 Health check: `GET http://localhost:5271/health`
+
+Ask a question with `POST http://localhost:5271/chat` and a body of `{ "question": "..." }`. The response has the answer with inline `[n]` markers, the cited sources, and an `isGrounded` flag. `requests/chat.http` has sample requests, including one the policies cannot answer. In Development, Swagger UI is at `http://localhost:5271/swagger`.
+
+### How a question is answered
+
+1. **Retrieve:** one hybrid query (keyword + vector) against the index, reranked by the semantic ranker. Results scoring below `MinRerankerScore` (default 1.5 on a 0–4 scale) are dropped.
+2. **Short-circuit:** if nothing is left, the API returns "I couldn't find that in the company policies." without calling the model.
+3. **Generate:** the chat model gets the numbered sources and the question, with instructions to answer only from the sources and cite them as `[n]`.
+4. **Cite:** `[n]` markers in the answer are mapped to the sources they refer to. An answer with no markers is marked `isGrounded: false`.
 
 ## Tests
 
