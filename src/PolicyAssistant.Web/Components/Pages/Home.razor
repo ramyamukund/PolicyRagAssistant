@@ -1,7 +1,173 @@
-﻿@page "/"
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject PolicyAssistantApiClient Api
+@inject ILogger<Home> Logger
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Policy Assistant</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="chat">
+    <header class="chat-header">
+        <h1>Policy Assistant</h1>
+        <p>Answers from the company policies, with sources.</p>
+    </header>
 
-Welcome to your new app.
+    @* column-reverse keeps the view pinned to the newest message without JS. *@
+    <div class="messages">
+        <div class="messages-inner" role="log" aria-live="polite">
+            @if (messages.Count == 0)
+            {
+                <div class="welcome">
+                    <p>Ask a question about leave, expenses, conduct or other company policies.</p>
+                    <div class="suggestions">
+                        @foreach (var suggestion in Suggestions)
+                        {
+                            <button type="button" class="suggestion" disabled="@(!RendererInfo.IsInteractive)"
+                                    @onclick="() => AskAsync(suggestion)">@suggestion</button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @foreach (var message in messages)
+            {
+                if (message.IsUser)
+                {
+                    <div class="message user">
+                        <div class="bubble">@message.Text</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="message assistant @(message.IsError ? "error" : null)">
+                        <div class="bubble">
+                            <div class="answer">
+                                @foreach (var paragraph in message.Paragraphs)
+                                {
+                                    <p>
+                                        @foreach (var segment in paragraph)
+                                        {
+                                            if (segment is CitationSegment { Citations: var citations })
+                                            {
+                                                <span class="badges">
+                                                    @foreach (var citation in citations)
+                                                    {
+                                                        var expanded = message.ExpandedCitation == citation;
+                                                        <button type="button" class="badge @(expanded ? "active" : null)"
+                                                                aria-expanded="@(expanded ? "true" : "false")"
+                                                                aria-label="Source @citation.Number: @citation.Title"
+                                                                title="@citation.Title"
+                                                                @onclick="() => message.ToggleCitation(citation)">@citation.Number</button>
+                                                    }
+                                                </span>
+                                            }
+                                            else if (segment is TextSegment { Text: var text })
+                                            {
+                                                @text
+                                            }
+                                        }
+                                    </p>
+                                }
+                            </div>
+
+                            @if (message.ExpandedCitation is { } open)
+                            {
+                                <div class="citation-panel">
+                                    <div class="citation-title">
+                                        <span class="badge static">@open.Number</span>
+                                        <span>@open.Title</span>
+                                    </div>
+                                    <blockquote>@open.Snippet</blockquote>
+                                </div>
+                            }
+
+                            @if (!message.IsError && !message.IsGrounded)
+                            {
+                                <p class="note">No policy sources cited.</p>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+
+            @if (isSending)
+            {
+                <div class="message assistant">
+                    <div class="bubble typing" aria-label="Thinking">
+                        <span></span><span></span><span></span>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <form class="composer" @onsubmit="() => AskAsync(draft)">
+        @* readonly rather than disabled while sending, so the input keeps focus for the next question. *@
+        <input @bind="draft" @bind:event="oninput"
+               maxlength="@MaxQuestionLength"
+               placeholder="Ask about company policies…"
+               aria-label="Your question"
+               autocomplete="off"
+               readonly="@isSending"
+               disabled="@(!RendererInfo.IsInteractive)" />
+        <button type="submit" disabled="@(isSending || string.IsNullOrWhiteSpace(draft))">Send</button>
+    </form>
+</div>
+
+@code {
+    // Matches the API's validation limit.
+    private const int MaxQuestionLength = 1000;
+
+    private const string ErrorMessage =
+        "Sorry, I couldn't reach the policy assistant just now. Please try again in a moment.";
+
+    private static readonly string[] Suggestions =
+    [
+        "How many days of annual leave do employees get?",
+        "What is the process for claiming travel expenses?",
+        "What is the probation period for new employees?",
+    ];
+
+    private readonly List<ChatMessage> messages = [];
+    private readonly CancellationTokenSource disposalCts = new();
+    private string draft = string.Empty;
+    private bool isSending;
+
+    private async Task AskAsync(string question)
+    {
+        question = question.Trim();
+        if (isSending || question.Length == 0)
+        {
+            return;
+        }
+
+        messages.Add(ChatMessage.FromUser(question));
+        draft = string.Empty;
+        isSending = true;
+
+        try
+        {
+            var response = await Api.AskAsync(question, disposalCts.Token);
+            messages.Add(ChatMessage.FromAnswer(response));
+        }
+        catch (OperationCanceledException) when (disposalCts.IsCancellationRequested)
+        {
+            // The user left the page; nothing to render.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Chat request failed");
+            messages.Add(ChatMessage.FromError(ErrorMessage));
+        }
+        finally
+        {
+            isSending = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        disposalCts.Cancel();
+        disposalCts.Dispose();
+    }
+}

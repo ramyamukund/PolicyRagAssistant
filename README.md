@@ -78,6 +78,8 @@ dotnet run --project src/PolicyAssistant.Api   # http://localhost:5271
 dotnet run --project src/PolicyAssistant.Web   # http://localhost:5248
 ```
 
+Open `http://localhost:5248` for the chat UI. Each answer shows its `[n]` citations as numbered badges; click one to see the source title and snippet. The Web app finds the API through `PolicyAssistantApi:BaseUrl` in `src/PolicyAssistant.Web/appsettings.json` (default `http://localhost:5271`). The browser never calls the API directly, because the Blazor server makes the call.
+
 Health check: `GET http://localhost:5271/health`
 
 Ask a question with `POST http://localhost:5271/chat` and a body of `{ "question": "..." }`. The response has the answer with inline `[n]` markers, the cited sources, and an `isGrounded` flag. `requests/chat.http` has sample requests, including one the policies cannot answer. In Development, Swagger UI is at `http://localhost:5271/swagger`.
